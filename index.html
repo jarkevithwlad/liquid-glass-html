@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Эффект Жидкого Стекла (Новая версия)</title>
+    <title>Эффект Жидкого Стекла (Интерактивная версия)</title>
     <style>
         * { box-sizing: border-box; }
         body, html { height: 100%; margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; color: white; overflow: hidden; }
@@ -23,12 +23,11 @@
         <p>Этот текстовый блок добавлен специально для демонстрации эффекта искажения. Переместите "жидкую линзу" сюда, чтобы увидеть, как она влияет не только на фоновое изображение, но и на контент страницы.</p>
         <p>В основе этого эффекта лежит SVG-фильтр `feDisplacementMap`. Он берет пиксели из исходного изображения (в данном случае, всего, что находится под линзой) и смещает их в соответствии с картой смещения. Карта смещения — это невидимое изображение, где красный канал определяет смещение по горизонтали, а зеленый — по вертикали.</p>
         <p>Таким образом, создается иллюзия преломления света, как будто мы смотрим через объемный стеклянный или водный объект. Этот метод очень производительный и позволяет создавать сложные визуальные эффекты прямо в браузере с помощью CSS и SVG.</p>
-        <p>Прокрутите этот блок, чтобы убедиться, что линза работает и с прокручиваемым контентом.</p>
     </aside>
 
     <main class="main-content">
         <h1>Эффект "Жидкое Стекло"</h1>
-        <p>Искажающая линза уже активна. Перемещайте её по экрану, чтобы увидеть эффект в действии.</p>
+        <p>Объект летает сам по себе. Нажмите и удерживайте кнопку мыши, чтобы управлять им. Отпустите, чтобы он снова полетел сам.</p>
     </main>
 
     <script>
@@ -45,35 +44,31 @@
 
         class Shader {
           constructor(options = {}) {
-            this.width = options.width || 100; this.height = options.height || 100; this.fragment = options.fragment || ((uv) => texture(uv.x, uv.y)); this.canvasDPI = 1; this.id = generateId(); this.offset = 10;
+            this.width = options.width || 100; this.height = options.height || 100; this.fragment = options.fragment || ((uv) => texture(uv.x, uv.y)); this.canvasDPI = 1; this.id = generateId();
             this.mouse = { x: 0, y: 0 }; this.mouseUsed = false;
+            
+            // --- НОВОЕ: Добавляем состояние для отслеживания режима ---
+            this.isFollowingMouse = false;
+            this.animationFrameId = null;
+            this.vx = 0;
+            this.vy = 0;
+            this.randomizeVelocity(); // Задаем начальную скорость
+
             this.createElement(); this.setupEventListeners(); this.updateShader();
+            this.startAnimation(); // Сразу запускаем автономную анимацию
           }
 
           createElement() {
             this.container = document.createElement('div');
-            // --- НОВОЕ РЕШЕНИЕ: Искусственный блик и убранный контраст ---
             this.container.style.cssText = `
-              position: fixed;
-              top: 50%; 
-              left: 50%;
-              transform: translate(-50%, -50%);
-              width: ${this.width}px;
-              height: ${this.height}px;
-              overflow: hidden;
-              border-radius: 150px;
-              /* 1. Внешняя тень для объема + ВНУТРЕННЯЯ БЕЛАЯ тень для блика */
+              position: fixed; top: 100px; left: 100px;
+              width: ${this.width}px; height: ${this.height}px;
+              overflow: hidden; border-radius: 150px;
               box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3), inset 0 0 10px 2px rgba(255, 255, 255, 0.5);
-              cursor: grab;
-              /* 2. Убраны contrast и brightness, чтобы не было затемнения */
               backdrop-filter: url(#${this.id}_filter) blur(0.5px);
-              z-index: 9999;
-              pointer-events: auto;
+              z-index: 9999; pointer-events: auto;
             `;
-            // --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-            this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            this.svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); this.svg.setAttribute('width', '0'); this.svg.setAttribute('height', '0'); this.svg.style.cssText = `position: fixed; top: 0; left: 0; pointer-events: none; z-index: 9998;`;
+            this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); this.svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); this.svg.setAttribute('width', '0'); this.svg.setAttribute('height', '0'); this.svg.style.cssText = `position: fixed; top: 0; left: 0; pointer-events: none; z-index: 9998;`;
             const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs'); const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
             filter.setAttribute('id', `${this.id}_filter`); filter.setAttribute('filterUnits', 'userSpaceOnUse'); filter.setAttribute('colorInterpolationFilters', 'sRGB'); filter.setAttribute('x', '0'); filter.setAttribute('y', '0'); filter.setAttribute('width', this.width.toString()); filter.setAttribute('height', this.height.toString());
             this.feImage = document.createElementNS('http://www.w3.org/2000/svg', 'feImage'); this.feImage.setAttribute('id', `${this.id}_map`); this.feImage.setAttribute('width', this.width.toString()); this.feImage.setAttribute('height', this.height.toString());
@@ -81,12 +76,98 @@
             filter.appendChild(this.feImage); filter.appendChild(this.feDisplacementMap); defs.appendChild(filter); this.svg.appendChild(defs);
             this.canvas = document.createElement('canvas'); this.canvas.width = this.width * this.canvasDPI; this.canvas.height = this.height * this.canvasDPI; this.canvas.style.display = 'none'; this.context = this.canvas.getContext('2d');
           }
+          
+          // --- НОВОЕ: Полностью переписанная логика обработчиков событий ---
+          setupEventListeners() {
+            // При нажатии мыши в любом месте
+            document.addEventListener('mousedown', (e) => {
+              this.isFollowingMouse = true;
+              document.body.style.cursor = 'grabbing';
+              // Останавливаем анимацию отскоков
+              if (this.animationFrameId) {
+                cancelAnimationFrame(this.animationFrameId);
+                this.animationFrameId = null;
+              }
+              // Перемещаем объект к курсору
+              this.updatePositionToMouse(e);
+            });
 
-          constrainPosition(x, y) { const viewportWidth = window.innerWidth; const viewportHeight = window.innerHeight; const minX = this.offset; const maxX = viewportWidth - this.width - this.offset; const minY = this.offset; const maxY = viewportHeight - this.height - this.offset; const constrainedX = Math.max(minX, Math.min(maxX, x)); const constrainedY = Math.max(minY, Math.min(maxY, y)); return { x: constrainedX, y: constrainedY }; }
-          setupEventListeners() { let isDragging = false; let startX, startY, initialX, initialY; this.container.addEventListener('mousedown', (e) => { isDragging = true; this.container.style.cursor = 'grabbing'; startX = e.clientX; startY = e.clientY; const rect = this.container.getBoundingClientRect(); initialX = rect.left; initialY = rect.top; e.preventDefault(); }); document.addEventListener('mousemove', (e) => { if (isDragging) { const deltaX = e.clientX - startX; const deltaY = e.clientY - startY; const newX = initialX + deltaX; const newY = initialY + deltaY; const constrained = this.constrainPosition(newX, newY); this.container.style.left = constrained.x + 'px'; this.container.style.top = constrained.y + 'px'; this.container.style.transform = 'none'; } const rect = this.container.getBoundingClientRect(); this.mouse.x = (e.clientX - rect.left) / rect.width; this.mouse.y = (e.clientY - rect.top) / rect.height; if (this.mouseUsed) { this.updateShader(); } }); document.addEventListener('mouseup', () => { isDragging = false; this.container.style.cursor = 'grab'; }); window.addEventListener('resize', () => { const rect = this.container.getBoundingClientRect(); const constrained = this.constrainPosition(rect.left, rect.top); if (rect.left !== constrained.x || rect.top !== constrained.y) { this.container.style.left = constrained.x + 'px'; this.container.style.top = constrained.y + 'px'; this.container.style.transform = 'none'; } }); }
+            // При отпускании мыши в любом месте
+            document.addEventListener('mouseup', () => {
+              if (this.isFollowingMouse) {
+                this.isFollowingMouse = false;
+                document.body.style.cursor = 'default';
+                // Задаем новую случайную скорость и запускаем анимацию отскоков
+                this.randomizeVelocity();
+                this.startAnimation();
+              }
+            });
+
+            // При движении мыши
+            document.addEventListener('mousemove', (e) => {
+              // Если мышь нажата, перемещаем объект
+              if (this.isFollowingMouse) {
+                this.updatePositionToMouse(e);
+              }
+              // В любом случае обновляем шейдер для внутреннего эффекта искажения
+              const rect = this.container.getBoundingClientRect();
+              this.mouse.x = (e.clientX - rect.left) / rect.width;
+              this.mouse.y = (e.clientY - rect.top) / rect.height;
+              if (this.mouseUsed) { this.updateShader(); }
+            });
+
+            window.addEventListener('resize', () => {
+                const rect = this.container.getBoundingClientRect();
+                const newX = Math.max(0, Math.min(rect.left, window.innerWidth - this.width));
+                const newY = Math.max(0, Math.min(rect.top, window.innerHeight - this.height));
+                this.container.style.left = newX + 'px';
+                this.container.style.top = newY + 'px';
+            });
+          }
+
+          // --- НОВЫЙ МЕТОД: Обновление позиции объекта по курсору ---
+          updatePositionToMouse(e) {
+            let newX = e.clientX - this.width / 2; // Центрируем объект по курсору
+            let newY = e.clientY - this.height / 2;
+            
+            // Ограничиваем движение рамками окна
+            newX = Math.max(0, Math.min(newX, window.innerWidth - this.width));
+            newY = Math.max(0, Math.min(newY, window.innerHeight - this.height));
+
+            this.container.style.left = newX + 'px';
+            this.container.style.top = newY + 'px';
+          }
+          
+          // --- НОВЫЙ МЕТОД: Генерация случайной скорости ---
+          randomizeVelocity() {
+            const speed = 6; // Используем быструю скорость
+            this.vx = (Math.random() - 0.5) * speed;
+            this.vy = (Math.random() - 0.5) * speed;
+          }
+
+          // Анимация отскоков (без изменений)
+          startAnimation() {
+            const animate = () => {
+              const rect = this.container.getBoundingClientRect();
+              if (rect.left + this.vx <= 0 || rect.left + this.width + this.vx >= window.innerWidth) this.vx *= -1;
+              if (rect.top + this.vy <= 0 || rect.top + this.height + this.vy >= window.innerHeight) this.vy *= -1;
+              let newX = rect.left + this.vx; let newY = rect.top + this.vy;
+              newX = Math.max(0, Math.min(newX, window.innerWidth - this.width));
+              newY = Math.max(0, Math.min(newY, window.innerHeight - this.height));
+              this.container.style.left = newX + 'px'; this.container.style.top = newY + 'px';
+              this.animationFrameId = requestAnimationFrame(animate);
+            };
+            if (!this.animationFrameId) animate();
+          }
+
           updateShader() { const mouseProxy = new Proxy(this.mouse, { get: (target, prop) => { this.mouseUsed = true; return target[prop]; } }); this.mouseUsed = false; const w = this.width * this.canvasDPI; const h = this.height * this.canvasDPI; const data = new Uint8ClampedArray(w * h * 4); let maxScale = 0; const rawValues = []; for (let i = 0; i < data.length; i += 4) { const x = (i / 4) % w; const y = Math.floor(i / 4 / w); const pos = this.fragment({ x: x / w, y: y / h }, mouseProxy); const dx = pos.x * w - x; const dy = pos.y * h - y; maxScale = Math.max(maxScale, Math.abs(dx), Math.abs(dy)); rawValues.push(dx, dy); } maxScale *= 0.5; let index = 0; for (let i = 0; i < data.length; i += 4) { const r = rawValues[index++] / maxScale + 0.5; const g = rawValues[index++] / maxScale + 0.5; data[i] = r * 255; data[i + 1] = g * 255; data[i + 2] = 0; data[i + 3] = 255; } this.context.putImageData(new ImageData(data, w, h), 0, 0); this.feImage.setAttributeNS('http://www.w3.org/1999/xlink', 'href', this.canvas.toDataURL()); this.feDisplacementMap.setAttribute('scale', (maxScale / this.canvasDPI).toString()); }
           appendTo(parent) { parent.appendChild(this.svg); parent.appendChild(this.container); }
-          destroy() { this.svg.remove(); this.container.remove(); this.canvas.remove(); }
+          
+          destroy() {
+            if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
+            // TODO: Удалить обработчики событий с document для полной очистки
+            this.svg.remove(); this.container.remove(); this.canvas.remove();
+          }
         }
 
         function createLiquidGlass() { const shader = new Shader({ width: 300, height: 200, fragment: (uv, mouse) => { const ix = uv.x - 0.5; const iy = uv.y - 0.5; const distanceToEdge = roundedRectSDF(ix, iy, 0.3, 0.2, 0.6); const displacement = smoothStep(0.8, 0, distanceToEdge - 0.15); const scaled = smoothStep(0, 1, displacement); return texture(ix * scaled + 0.5, iy * scaled + 0.5); } }); shader.appendTo(document.body); window.liquidGlass = shader; }
